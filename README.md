@@ -4,19 +4,23 @@ A local-first **Retrieval-Augmented Generation (RAG)** application for querying 
 
 The application allows PDF documents to be uploaded through an API, converts their contents into vector embeddings, stores them in ChromaDB, retrieves relevant document chunks based on a user's question, and uses an Ollama-hosted language model to generate a grounded response.
 
-The project is being extended toward a containerized and distributed deployment on **Google Cloud Platform (GCP)** using **Docker, Google Kubernetes Engine (GKE), Artifact Registry, and GitHub Actions**.
+The project is deployed on **Google Cloud Platform (GCP)** using **Docker, Google Kubernetes Engine (GKE), Artifact Registry, Kubernetes persistent storage, and GitHub Actions**. The current GKE runtime uses separate deployments for FastAPI, ChromaDB, and Ollama in the `rag` namespace.
 
 ---
 
 ## Architecture
+
+![Nexora HR RAG - GKE Architecture](https://drive.google.com/file/d/1zlQNiro83Dng055IIf5wx4agFhixemoG/view?usp=share_link)
+
+The architecture image summarizes the RAG data path and GKE deployment. The public LoadBalancer routes requests to replicated FastAPI pods, which use Kubernetes services to reach ChromaDB and Ollama. Persistent volumes retain Chroma vector data and Ollama model files across pod replacement.
 
 ```text
                          User
                           |
                           v
                      FastAPI API
-                    /     |      \
-                   /      |       \
+                    /     |      \\
+                   /      |       \\
             /documents   /ask    /health
                 |         |
                 v         v
@@ -64,9 +68,9 @@ The project is being extended toward a containerized and distributed deployment 
 | Ollama | Local model runtime |
 | `llama3.2:3b` | Response generation |
 | Docker | Application containerization |
-| GKE | Target Kubernetes environment |
+| GKE | Kubernetes runtime for the deployed application |
 | Artifact Registry | Docker image registry |
-| GitHub Actions | Target CI/CD pipeline |
+| GitHub Actions | CI/CD pipeline for build and GKE deployment |
 
 ---
 
@@ -389,9 +393,9 @@ RAG/
 ## 1. Clone the repository
 
 ```bash
-git clone <YOUR_REPOSITORY_URL>
+git clone \<YOUR_REPOSITORY_URL>
 
-cd <YOUR_REPOSITORY>
+cd \<YOUR_REPOSITORY>
 ```
 
 ---
@@ -463,7 +467,7 @@ llama3.2:3b
 Ollama normally runs locally on:
 
 ```text
-http://localhost:11434
+http\://localhost:11434
 ```
 
 ---
@@ -483,12 +487,12 @@ docker network create rag-network
 Start Chroma:
 
 ```bash
-docker run -d \
-  --name chroma \
-  --network rag-network \
-  -p 8001:8000 \
-  -v chroma-data:/data \
-  chromadb/chroma:latest
+docker run -d \\
+  --name chroma \\
+  --network rag-network \\
+  -p 8001:8000 \\
+  -v chroma-data:/data \\
+  chromadb/chroma\:latest
 ```
 
 Check:
@@ -500,7 +504,7 @@ docker ps
 Test the Chroma server:
 
 ```bash
-curl http://localhost:8001/api/v2/heartbeat
+curl http\://localhost:8001/api/v2/heartbeat
 ```
 
 ---
@@ -512,21 +516,21 @@ When FastAPI runs directly on the host:
 ```bash
 export CHROMA_HOST=localhost
 export CHROMA_PORT=8001
-export OLLAMA_URL=http://localhost:11434
+export OLLAMA_URL=http\://localhost:11434
 
-uvicorn main:app --reload
+uvicorn main\:app --reload
 ```
 
 Swagger UI:
 
 ```text
-http://localhost:8000/docs
+http\://localhost:8000/docs
 ```
 
 Health check:
 
 ```text
-http://localhost:8000/health
+http\://localhost:8000/health
 ```
 
 ---
@@ -552,13 +556,13 @@ docker images
 When Chroma runs in Docker and Ollama runs on the host machine:
 
 ```bash
-docker run \
-  --name nexora-rag-api \
-  --network rag-network \
-  -p 8000:8000 \
-  -e CHROMA_HOST=chroma \
-  -e CHROMA_PORT=8000 \
-  -e OLLAMA_URL=http://host.docker.internal:11434 \
+docker run \\
+  --name nexora-rag-api \\
+  --network rag-network \\
+  -p 8000:8000 \\
+  -e CHROMA_HOST=chroma \\
+  -e CHROMA_PORT=8000 \\
+  -e OLLAMA_URL=http\://host.docker.internal:11434 \\
   nexora-rag-api
 ```
 
@@ -597,7 +601,7 @@ The application supports configuration through environment variables.
 |---|---|---|
 | `CHROMA_HOST` | `localhost` | `chroma` |
 | `CHROMA_PORT` | `8000` / configured host port | `8000` |
-| `OLLAMA_URL` | `http://localhost:11434` | `http://ollama:11434` |
+| `OLLAMA_URL` | `http\://localhost:11434` | `http\://ollama:11434` |
 | `EMBEDDING_MODEL` | `nomic-embed-text` | `nomic-embed-text` |
 | `LLM_MODEL` | `llama3.2:3b` | `llama3.2:3b` |
 | `CHROMA_COLLECTION` | `nexora_hr` | `nexora_hr` |
@@ -606,9 +610,9 @@ This allows the same Python application to run locally, in Docker, and in Kubern
 
 ---
 
-# Google Cloud Target Architecture
+# Google Kubernetes Engine (GKE) Deployment
 
-The target deployment is:
+The deployed cloud architecture is:
 
 ```text
 GitHub
@@ -646,6 +650,79 @@ FastAPI Pod 1              FastAPI Pod 2
 
 ---
 
+# GKE Deployment Details
+
+The cloud deployment runs in Google Cloud project `nexora-ai-agent-505409` with the following configuration:
+
+| Setting | Value |
+|---|---|
+| Platform | Google Kubernetes Engine (GKE) |
+| Region | `europe-west1` |
+| Zone | `europe-west1-b` |
+| Cluster | `rag-cluster` |
+| Namespace | `rag` |
+| Artifact Registry repository | `rag-containers` |
+| API image | `nexora-rag-api` |
+| FastAPI replicas | 2 |
+| ChromaDB replicas | 1 |
+| Ollama replicas | 1 |
+| API service | `LoadBalancer` |
+| ChromaDB storage | PersistentVolumeClaim (`chroma-data`) |
+| Ollama storage | PersistentVolumeClaim (`ollama-data`) |
+
+### Runtime request path
+
+```text
+Client
+  |
+  v
+GCP Load Balancer :80
+  |
+  v
+rag-api-service
+  |
+  +--> rag-api pod 1 :8000
+  |
+  +--> rag-api pod 2 :8000
+          |
+          +--> chroma:8000 ------> ChromaDB + persistent vector data
+          |
+          +--> ollama:11434 -----> nomic-embed-text / llama3.2:3b
+```
+
+### Kubernetes resources
+
+```text
+namespace/rag
+├── deployment/rag-api       (2 replicas)
+├── service/rag-api-service  (LoadBalancer)
+├── deployment/chroma        (1 replica)
+├── service/chroma           (ClusterIP)
+├── pvc/chroma-data
+├── deployment/ollama        (1 replica)
+├── service/ollama           (ClusterIP)
+└── pvc/ollama-data
+```
+
+### Verify the deployment
+
+```bash
+kubectl get pods -n rag
+kubectl get deployments -n rag
+kubectl get svc -n rag
+kubectl get pvc -n rag
+```
+
+Expected deployment readiness:
+
+```text
+chroma    1/1
+ollama    1/1
+rag-api   2/2
+```
+
+---
+
 # Kubernetes Configuration
 
 Inside Kubernetes, services communicate through Kubernetes DNS.
@@ -661,7 +738,7 @@ env:
     value: "8000"
 
   - name: OLLAMA_URL
-    value: "http://ollama:11434"
+    value: "http\://ollama:11434"
 
   - name: EMBEDDING_MODEL
     value: "nomic-embed-text"
@@ -674,17 +751,17 @@ The API can therefore reach:
 
 ```text
 ChromaDB
-http://chroma:8000
+http\://chroma:8000
 
 Ollama
-http://ollama:11434
+http\://ollama:11434
 ```
 
 ---
 
-# CI/CD Target
+# GitHub Actions CI/CD
 
-The intended GitHub Actions deployment pipeline is:
+The GitHub Actions deployment pipeline is:
 
 ```text
 Developer
@@ -850,25 +927,25 @@ Authentication and tenant-level authorization are also required before storing d
 When starting the application locally, test the infrastructure in this order:
 
 ```text
-1. Ollama
+1\. Ollama
       |
       v
-2. ChromaDB
+2\. ChromaDB
       |
       v
-3. FastAPI /health
+3\. FastAPI /health
       |
       v
-4. /documents/list
+4\. /documents/list
       |
       v
-5. POST /documents
+5\. POST /documents
       |
       v
-6. /documents/list
+6\. /documents/list
       |
       v
-7. /ask
+7\. /ask
 ```
 
 This isolates infrastructure failures before testing the complete RAG pipeline.
