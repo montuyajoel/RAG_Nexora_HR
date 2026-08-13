@@ -16,9 +16,6 @@ def build_knowledge_base(
         loader = PyPDFLoader(path)
         documents.extend(loader.load())
 
-    print(f"Loaded {len(documents)} pages.")
-
-
     # 2. Split documents into chunks
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -33,9 +30,6 @@ def build_knowledge_base(
     )
 
     chunks = splitter.split_documents(documents)
-
-    print(f"Split into {len(chunks)} chunks.")
-
 
     # 3. Generate unique IDs
     ids = []
@@ -96,10 +90,4 @@ def build_knowledge_base(
 
             for i, chunk in enumerate(chunks)
         ],
-    )
-
-
-    print(
-        f"Added {len(chunks)} chunks "
-        "to the 'nexora_hr' collection."
     )
