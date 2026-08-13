@@ -2,9 +2,7 @@
 
 A local-first **Retrieval-Augmented Generation (RAG)** application for querying HR policy documents using **FastAPI, ChromaDB, Ollama, LangChain, and local LLMs**.
 
-The application allows PDF documents to be uploaded through an API, converts their contents into vector embeddings, stores them in ChromaDB, retrieves relevant document chunks based on a user's question, and uses an Ollama-hosted language model to generate a grounded response.
-
-The project is deployed on **Google Cloud Platform (GCP)** using **Docker, Google Kubernetes Engine (GKE), Artifact Registry, Kubernetes persistent storage, and GitHub Actions**. The current GKE runtime uses separate deployments for FastAPI, ChromaDB, and Ollama in the `rag` namespace.
+The application supports authenticated HR-policy retrieval, administrative PDF ingestion and document management, vector search through ChromaDB, and grounded answer generation through Ollama. It is designed to run locally with Docker and on **Google Cloud Platform (GCP)** using **Google Kubernetes Engine (GKE), Artifact Registry, persistent storage, and GitHub Actions**.
 
 ---
 
@@ -12,43 +10,65 @@ The project is deployed on **Google Cloud Platform (GCP)** using **Docker, Googl
 
 ![Nexora HR RAG - GKE Architecture](docs/Nexora_RAG_ARCH.png)
 
-The architecture image summarizes the RAG data path and GKE deployment. The public LoadBalancer routes requests to replicated FastAPI pods, which use Kubernetes services to reach ChromaDB and Ollama. Persistent volumes retain Chroma vector data and Ollama model files across pod replacement.
+```text
+Client
+  |
+  | X-API-Key / X-Admin-API-Key
+  v
+FastAPI
+  |
+  +--> /health
+  +--> /ask
+  +--> /retrieve
+  +--> /documents
+  |
+  +--------------------+
+  |                    |
+  v                    v
+ChromaDB             Ollama
+  |                    |
+  |                    +--> nomic-embed-text
+  |                    +--> llama3.2:3b
+  |
+  +--> Persistent Storage
+```
+
+The RAG flow is:
 
 ```text
-                         User
-                          |
-                          v
-                     FastAPI API
-                    /     |      \\
-                   /      |       \\
-            /documents   /ask    /health
-                |         |
-                v         v
-          PDF Ingestion   Query
-                |         |
-                v         v
-          PyPDFLoader   nomic-embed-text
-                |         |
-                v         v
-          Text Splitter  ChromaDB
-                |         |
-                v         |
-          nomic-embed-text|
-                |         |
-                v         v
-             ChromaDB  Relevant Chunks
-                          |
-                          v
-                    Augmented Prompt
-                          |
-                          v
-                       Ollama
-                          |
-                          v
-                    llama3.2:3b
-                          |
-                          v
-                     RAG Answer
+PDF
+  |
+  v
+PyPDFLoader
+  |
+  v
+RecursiveCharacterTextSplitter
+  |
+  v
+nomic-embed-text
+  |
+  v
+ChromaDB
+
+Question
+  |
+  v
+nomic-embed-text
+  |
+  v
+ChromaDB similarity search
+  |
+  v
+Relevant chunks
+  |
+  v
+Grounded prompt
+  |
+  v
+Ollama / llama3.2:3b
+  |
+  v
+Answer
 ```
 
 ---
@@ -61,318 +81,332 @@ The architecture image summarizes the RAG data path and GKE deployment. The publ
 | FastAPI | REST API |
 | Uvicorn | ASGI application server |
 | LangChain | PDF loading and text processing |
-| PyPDFLoader | Extracts text from PDFs |
-| RecursiveCharacterTextSplitter | Splits documents into chunks |
+| PyPDFLoader | PDF text extraction |
+| RecursiveCharacterTextSplitter | Document chunking |
 | ChromaDB | Vector database |
 | `nomic-embed-text` | Embedding model |
 | Ollama | Local model runtime |
 | `llama3.2:3b` | Response generation |
-| Docker | Application containerization |
-| GKE | Kubernetes runtime for the deployed application |
-| Artifact Registry | Docker image registry |
-| GitHub Actions | CI/CD pipeline for build and GKE deployment |
+| Docker | Containerization |
+| GKE | Kubernetes runtime |
+| Artifact Registry | Container registry |
+| GitHub Actions | CI/CD |
 
 ---
 
-# RAG Workflow
+## Security Model
 
-The application follows the standard **Retrieve → Augment → Generate** architecture.
+The application uses two API-key scopes.
 
-## 1. Retrieve
+| Header | Purpose |
+|---|---|
+| `X-API-Key` | User-level RAG access |
+| `X-Admin-API-Key` | Administrative document operations |
 
-When a question reaches `/ask`, the question is converted into an embedding using:
+Both keys are loaded from environment variables and validated using `secrets.compare_digest()`.
+
+Required variables:
 
 ```text
-nomic-embed-text
+API_KEY
+ADMIN_API_KEY
 ```
 
-ChromaDB compares the question embedding against the stored document embeddings and retrieves the most semantically relevant chunks.
+The application is configured to fail fast if either required key is missing.
+
+### Access Model
 
 ```text
-Question
-   |
-   v
-nomic-embed-text
-   |
-   v
-Query Vector
-   |
-   v
-ChromaDB
-   |
-   v
-Top Relevant Chunks
+Public
+└── GET /health
+
+Authenticated user
+├── GET /ask
+└── GET /retrieve
+
+Administrator
+├── POST   /documents
+├── GET    /documents
+├── GET    /documents/list
+├── DELETE /documents/{document_id}
+└── DELETE /documents?confirm=DELETE_ALL_DOCUMENTS
 ```
 
-The current configuration retrieves:
+Bulk deletion requires the exact confirmation phrase:
+
+```text
+DELETE_ALL_DOCUMENTS
+```
+
+---
+
+## RAG Workflow
+
+### 1. Retrieve
+
+`GET /ask` embeds the incoming question and queries ChromaDB.
+
+Current configuration:
 
 ```python
 n_results=4
 ```
 
----
+A diagnostic retrieval endpoint is also available:
 
-## 2. Augment
-
-The retrieved document chunks are combined with the original question.
-
-The resulting prompt instructs the LLM to answer using only the retrieved HR policy context.
-
-```text
-Retrieved Context
-       +
-User Question
-       |
-       v
-Augmented Prompt
+```http
+GET /retrieve
 ```
 
-The prompt includes grounding rules intended to reduce hallucinations and prevent information from unrelated leave or policy categories from being mixed together.
+It currently uses:
 
----
+```python
+n_results=3
+```
 
-## 3. Generate
+### 2. Augment
 
-The augmented prompt is sent to the language model through Ollama.
+Retrieved chunks are combined with the user question in a grounded HR-policy prompt.
 
-Current generation model:
+The prompt instructs the model to:
+
+- use only retrieved context;
+- avoid outside knowledge;
+- avoid invented policy;
+- avoid mixing unrelated leave categories;
+- explicitly state when the supplied context is insufficient.
+
+### 3. Generate
+
+The augmented prompt is sent to Ollama using:
 
 ```text
 llama3.2:3b
 ```
 
-The generated response is returned together with:
+The response includes:
 
+- generated answer;
 - retrieved context;
 - metadata;
 - vector distances.
 
-This makes it possible to inspect which document chunks were used to generate the answer.
-
 ---
 
-# Document Ingestion
+## Document Ingestion
 
-PDF documents can be uploaded through:
+Upload endpoint:
 
 ```http
 POST /documents
 ```
 
-The ingestion pipeline is:
+Required header:
+
+```text
+X-Admin-API-Key: <admin-key>
+```
+
+Pipeline:
 
 ```text
 PDF Upload
-    |
-    v
-Save PDF
-    |
-    v
+   |
+   +--> MIME validation
+   +--> 10 MB size limit
+   +--> %PDF- signature validation
+   |
+   v
+UUID-based stored filename
+   |
+   v
 PyPDFLoader
-    |
-    v
-Extract Pages
-    |
-    v
+   |
+   v
 RecursiveCharacterTextSplitter
-    |
-    v
-Text Chunks
-    |
-    v
+   |
+   v
 nomic-embed-text
-    |
-    v
-Vector Embeddings
-    |
-    v
+   |
+   v
 ChromaDB
 ```
 
-Current chunking configuration:
+### Upload Validation
+
+Current protections:
+
+```text
+Maximum size: 10 MB
+Required MIME type: application/pdf
+Required file signature: %PDF-
+```
+
+Invalid content is rejected before it is persisted as a normal uploaded document.
+
+### Chunking Configuration
 
 ```python
 RecursiveCharacterTextSplitter(
-    chunk_size=800,
-    chunk_overlap=100,
+    chunk_size=1000,
+    chunk_overlap=120,
     separators=[
         "\n\n",
         "\n",
         ". ",
         " ",
         ""
-    ]
+    ],
 )
 ```
 
-Document chunks contain metadata such as:
+Chunk IDs are derived from source, page, and a SHA-256-based content hash.
+
+Current metadata shape:
 
 ```json
 {
-    "source": "./pdfs/example.pdf",
-    "page": 3,
-    "chunk_index": 12
+  "source": "./pdfs/example.pdf",
+  "page": 3,
+  "chunk_index": 12
 }
 ```
 
 ---
 
-# API Endpoints
+## API Endpoints
 
-## Health Check
+### Health Check
 
 ```http
 GET /health
 ```
 
+No API key required.
+
 Example response:
 
 ```json
 {
-    "status": "healthy",
-    "service": "nexora-rag-api"
+  "status": "healthy",
+  "service": "nexora-rag-api"
 }
 ```
 
-The endpoint is designed for Docker/Kubernetes health checks.
-
----
-
-## Ask a Question
+### Ask a Question
 
 ```http
-GET /ask
+GET /ask?question=<question>
 ```
 
-Query parameter:
+Header:
 
 ```text
-question
+X-API-Key: <api-key>
 ```
 
-Example:
+### Retrieve Raw Context
+
+```http
+GET /retrieve?question=<question>
+```
+
+Header:
 
 ```text
-/ask?question=Does annual leave carry over to next year?
+X-API-Key: <api-key>
 ```
 
-Example response:
+Returns retrieved chunks, metadata, and distances without generating an LLM answer.
 
-```json
-{
-    "question": "Does annual leave carry over to next year?",
-    "answer": "Up to 5 unused days may be carried over...",
-    "context_used": [
-        "..."
-    ],
-    "metadata": [
-        {
-            "source": "./pdfs/leave_policy.pdf",
-            "page": 4,
-            "chunk_index": 7
-        }
-    ],
-    "distances": [
-        0.32
-    ]
-}
-```
-
----
-
-## Upload a PDF
+### Upload a PDF
 
 ```http
 POST /documents
 ```
 
-The endpoint accepts:
+Header:
+
+```text
+X-Admin-API-Key: <admin-key>
+```
+
+Content type:
 
 ```text
 multipart/form-data
 ```
 
-Only PDF files are accepted.
-
-Example response:
-
-```json
-{
-    "message": "Document uploaded and added to the knowledge base.",
-    "document_id": "0db30c7d...",
-    "filename": "leave_policy.pdf"
-}
-```
-
----
-
-## Inspect Stored Chunks
+### Inspect Stored Chunks
 
 ```http
 GET /documents
 ```
 
-Returns all chunks currently stored in the ChromaDB collection.
+Admin only.
 
-This endpoint is primarily intended for development and debugging.
+Returns stored chunks, metadata, and Chroma record IDs.
 
-Example:
-
-```json
-{
-    "total_chunks": 120,
-    "documents": [
-        {
-            "id": "leave_policy_page_1_...",
-            "metadata": {
-                "source": "./pdfs/leave_policy.pdf",
-                "page": 1,
-                "chunk_index": 2
-            },
-            "content": "..."
-        }
-    ]
-}
-```
-
----
-
-## List Uploaded Documents
+### List Uploaded Documents
 
 ```http
 GET /documents/list
 ```
 
-Returns unique source documents instead of individual chunks.
+Admin only.
 
-Example:
+Returns unique uploaded document sources and chunk counts.
 
-```json
-{
-    "total_documents": 2,
-    "documents": [
-        {
-            "source": "./pdfs/leave_policy.pdf",
-            "filename": "leave_policy.pdf",
-            "chunks": 38
-        }
-    ]
-}
+### Delete One Document
+
+```http
+DELETE /documents/{document_id}
 ```
+
+Admin only.
+
+The application resolves the matching Chroma record IDs and deletes them using:
+
+```python
+collection.delete(
+    ids=document_ids_to_delete
+)
+```
+
+### Delete All Documents
+
+```http
+DELETE /documents?confirm=DELETE_ALL_DOCUMENTS
+```
+
+Admin only.
+
+The application first fetches all stored IDs, then deletes them explicitly. Empty Chroma filters such as `where={}` are not used.
 
 ---
 
-# Project Structure
+## Project Structure
 
 ```text
-RAG/
+RAG_Nexora_HR/
 ├── main.py
-├── knowledge_base.py
+├── config.py
+├── clients.py
+├── security.py
 ├── requirements.txt
 ├── Dockerfile
-├── .dockerignore
 │
-├── pdfs/
+├── routers/
+│   ├── ask.py
+│   ├── documents.py
+│   └── healthcheck.py
+│
+├── tools/
+│   ├── file_processor.py
+│   └── logger.py
+│
+├── docs/
+│   └── Nexora_RAG_ARCH.png
 │
 ├── kubernetes/
 │   ├── api.yaml
@@ -388,56 +422,31 @@ RAG/
 
 ---
 
-# Local Installation
+## Local Installation
 
-## 1. Clone the repository
+Clone:
 
 ```bash
-git clone \<YOUR_REPOSITORY_URL>
-
-cd \<YOUR_REPOSITORY>
+git clone https://github.com/montuyajoel/RAG_Nexora_HR.git
+cd RAG_Nexora_HR
 ```
 
----
-
-## 2. Create a virtual environment
+Create a virtual environment:
 
 ```bash
 python -m venv .venv
-```
-
-Activate it on macOS/Linux:
-
-```bash
 source .venv/bin/activate
 ```
 
----
-
-## 3. Install dependencies
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Core dependencies include:
-
-```text
-fastapi
-uvicorn[standard]
-chromadb
-ollama
-langchain-community
-langchain-text-splitters
-pypdf
-python-multipart
-```
-
 ---
 
-# Ollama Setup
-
-Install and start Ollama.
+## Ollama Setup
 
 Pull the embedding model:
 
@@ -457,28 +466,17 @@ Verify:
 ollama list
 ```
 
-Expected models:
+Default local endpoint:
 
 ```text
-nomic-embed-text
-llama3.2:3b
-```
-
-Ollama normally runs locally on:
-
-```text
-http\://localhost:11434
+http://localhost:11434
 ```
 
 ---
 
-# ChromaDB
+## ChromaDB Local Setup
 
-The current architecture uses ChromaDB in **server mode** rather than `PersistentClient`.
-
-This allows multiple API instances to communicate with the same vector database.
-
-Create a Docker network:
+Create the Docker network:
 
 ```bash
 docker network create rag-network
@@ -487,224 +485,153 @@ docker network create rag-network
 Start Chroma:
 
 ```bash
-docker run -d \\
-  --name chroma \\
-  --network rag-network \\
-  -p 8001:8000 \\
-  -v chroma-data:/data \\
-  chromadb/chroma\:latest
+docker run -d \
+  --name chroma \
+  --network rag-network \
+  -p 8001:8000 \
+  -v chroma-data:/data \
+  chromadb/chroma:1.5.9
 ```
 
-Check:
+From the host machine:
 
 ```bash
-docker ps
+curl http://localhost:8001/api/v2/heartbeat
 ```
 
-Test the Chroma server:
+FastAPI containers on the same Docker network should use:
 
-```bash
-curl http\://localhost:8001/api/v2/heartbeat
+```text
+CHROMA_HOST=chroma
+CHROMA_PORT=8000
 ```
+
+The host-published `8001` port is only for direct host access.
 
 ---
 
-# Run FastAPI Locally
+## Run FastAPI with Docker
 
-When FastAPI runs directly on the host:
+Generate development keys locally:
 
 ```bash
-export CHROMA_HOST=localhost
-export CHROMA_PORT=8001
-export OLLAMA_URL=http\://localhost:11434
-
-uvicorn main\:app --reload
+export API_KEY="$(openssl rand -hex 32)"
+export ADMIN_API_KEY="$(openssl rand -hex 32)"
 ```
 
-Swagger UI:
-
-```text
-http\://localhost:8000/docs
-```
-
-Health check:
-
-```text
-http\://localhost:8000/health
-```
-
----
-
-# Docker
-
-## Build
+Build:
 
 ```bash
 docker build -t nexora-rag-api .
 ```
 
-Verify the image:
+Run:
 
 ```bash
-docker images
-```
-
----
-
-## Run
-
-When Chroma runs in Docker and Ollama runs on the host machine:
-
-```bash
-docker run \\
-  --name nexora-rag-api \\
-  --network rag-network \\
-  -p 8000:8000 \\
-  -e CHROMA_HOST=chroma \\
-  -e CHROMA_PORT=8000 \\
-  -e OLLAMA_URL=http\://host.docker.internal:11434 \\
+docker run \
+  --name nexora-rag-api \
+  --network rag-network \
+  -p 8000:8000 \
+  -e CHROMA_HOST=chroma \
+  -e CHROMA_PORT=8000 \
+  -e OLLAMA_URL=http://host.docker.internal:11434 \
+  -e API_KEY="$API_KEY" \
+  -e ADMIN_API_KEY="$ADMIN_API_KEY" \
   nexora-rag-api
 ```
 
-The resulting local architecture is:
+Health check:
 
-```text
-Host Machine
-│
-├── Ollama
-│   :11434
-│
-└── Docker Network
-    │
-    ├── FastAPI
-    │   :8000
-    │
-    └── ChromaDB
-        :8000
+```bash
+curl http://localhost:8000/health
 ```
 
-The host exposes:
+RAG request:
 
-```text
-FastAPI   localhost:8000
-ChromaDB  localhost:8001
-Ollama    localhost:11434
+```bash
+curl -G \
+  -H "X-API-Key: $API_KEY" \
+  "http://localhost:8000/ask" \
+  --data-urlencode "question=What is the annual leave entitlement?"
+```
+
+Admin document list:
+
+```bash
+curl \
+  -H "X-Admin-API-Key: $ADMIN_API_KEY" \
+  "http://localhost:8000/documents/list"
+```
+
+Delete all documents:
+
+```bash
+curl -X DELETE \
+  -H "X-Admin-API-Key: $ADMIN_API_KEY" \
+  "http://localhost:8000/documents?confirm=DELETE_ALL_DOCUMENTS"
 ```
 
 ---
 
-# Environment Variables
-
-The application supports configuration through environment variables.
+## Environment Variables
 
 | Variable | Local Default | Kubernetes |
 |---|---|---|
 | `CHROMA_HOST` | `localhost` | `chroma` |
-| `CHROMA_PORT` | `8000` / configured host port | `8000` |
-| `OLLAMA_URL` | `http\://localhost:11434` | `http\://ollama:11434` |
+| `CHROMA_PORT` | `8000` | `8000` |
+| `OLLAMA_URL` | `http://localhost:11434` | `http://ollama:11434` |
 | `EMBEDDING_MODEL` | `nomic-embed-text` | `nomic-embed-text` |
 | `LLM_MODEL` | `llama3.2:3b` | `llama3.2:3b` |
 | `CHROMA_COLLECTION` | `nexora_hr` | `nexora_hr` |
-
-This allows the same Python application to run locally, in Docker, and in Kubernetes without changing the source code.
+| `API_KEY` | required | secret-managed |
+| `ADMIN_API_KEY` | required | secret-managed |
 
 ---
 
-# Google Kubernetes Engine (GKE) Deployment
+## GKE Deployment
 
-The deployed cloud architecture is:
+Deployment model:
 
 ```text
 GitHub
    |
-   | push
    v
 GitHub Actions
    |
-   +--> Test
-   |
-   +--> Docker Build
-   |
+   +--> Docker build
    +--> Artifact Registry
    |
    v
 Google Kubernetes Engine
    |
-   +-----------------------------+
-   |                             |
-   v                             v
-FastAPI Pod 1              FastAPI Pod 2
-   |                             |
-   +-------------+---------------+
-                 |
-        +--------+--------+
-        |                 |
-        v                 v
-     ChromaDB           Ollama
-                           |
-                   +-------+-------+
-                   |               |
-                   v               v
-          nomic-embed-text   llama3.2:3b
+   +--> rag-api
+   +--> chroma + PVC
+   +--> ollama + PVC
 ```
 
----
-
-# GKE Deployment Details
-
-The cloud deployment runs in Google Cloud project `nexora-ai-agent-505409` with the following configuration:
+Current configuration:
 
 | Setting | Value |
 |---|---|
-| Platform | Google Kubernetes Engine (GKE) |
+| Project | `nexora-ai-agent-505409` |
 | Region | `europe-west1` |
 | Zone | `europe-west1-b` |
 | Cluster | `rag-cluster` |
 | Namespace | `rag` |
-| Artifact Registry repository | `rag-containers` |
+| Artifact Registry | `rag-containers` |
 | API image | `nexora-rag-api` |
 | FastAPI replicas | 2 |
 | ChromaDB replicas | 1 |
 | Ollama replicas | 1 |
-| API service | `LoadBalancer` |
-| ChromaDB storage | PersistentVolumeClaim (`chroma-data`) |
-| Ollama storage | PersistentVolumeClaim (`ollama-data`) |
 
-### Runtime request path
+Internal Kubernetes service discovery:
 
 ```text
-Client
-  |
-  v
-GCP Load Balancer :80
-  |
-  v
-rag-api-service
-  |
-  +--> rag-api pod 1 :8000
-  |
-  +--> rag-api pod 2 :8000
-          |
-          +--> chroma:8000 ------> ChromaDB + persistent vector data
-          |
-          +--> ollama:11434 -----> nomic-embed-text / llama3.2:3b
+FastAPI -> http://chroma:8000
+FastAPI -> http://ollama:11434
 ```
 
-### Kubernetes resources
-
-```text
-namespace/rag
-├── deployment/rag-api       (2 replicas)
-├── service/rag-api-service  (LoadBalancer)
-├── deployment/chroma        (1 replica)
-├── service/chroma           (ClusterIP)
-├── pvc/chroma-data
-├── deployment/ollama        (1 replica)
-├── service/ollama           (ClusterIP)
-└── pvc/ollama-data
-```
-
-### Verify the deployment
+Verify deployment:
 
 ```bash
 kubectl get pods -n rag
@@ -713,275 +640,77 @@ kubectl get svc -n rag
 kubectl get pvc -n rag
 ```
 
-Expected deployment readiness:
+---
 
-```text
-chroma    1/1
-ollama    1/1
-rag-api   2/2
-```
+## Logging and Error Handling
+
+Application modules use a shared logger.
+
+Internal exceptions are logged server-side while API clients receive sanitized error responses. This avoids exposing ChromaDB, Ollama, filesystem, or internal network details to clients.
 
 ---
 
-# Kubernetes Configuration
-
-Inside Kubernetes, services communicate through Kubernetes DNS.
-
-FastAPI configuration:
-
-```yaml
-env:
-  - name: CHROMA_HOST
-    value: "chroma"
-
-  - name: CHROMA_PORT
-    value: "8000"
-
-  - name: OLLAMA_URL
-    value: "http\://ollama:11434"
-
-  - name: EMBEDDING_MODEL
-    value: "nomic-embed-text"
-
-  - name: LLM_MODEL
-    value: "llama3.2:3b"
-```
-
-The API can therefore reach:
-
-```text
-ChromaDB
-http\://chroma:8000
-
-Ollama
-http\://ollama:11434
-```
-
----
-
-# GitHub Actions CI/CD
-
-The GitHub Actions deployment pipeline is:
-
-```text
-Developer
-   |
-git push
-   |
-   v
-GitHub
-   |
-   v
-GitHub Actions
-   |
-   +--> Run tests
-   |
-   +--> Authenticate to GCP
-   |
-   +--> Build Docker image
-   |
-   +--> Push image
-   |
-   v
-Artifact Registry
-   |
-   v
-GKE Deployment
-   |
-   v
-Rolling Update
-```
-
-Each commit should produce a versioned Docker image using the Git commit SHA.
-
-Example:
-
-```text
-europe-west1-docker.pkg.dev/
-PROJECT_ID/
-rag-containers/
-nexora-rag-api:
-COMMIT_SHA
-```
-
----
-
-# Current Development Status
+## Current Engineering Status
 
 ### Implemented
 
-- FastAPI REST API
-- PDF upload endpoint
-- PDF validation
-- LangChain document loading
-- Recursive text chunking
-- `nomic-embed-text` embeddings
-- ChromaDB semantic retrieval
-- Ollama LLM generation
-- Grounded RAG prompting
-- Retrieval metadata inspection
-- Similarity-distance inspection
-- Document listing
-- ChromaDB server architecture
-- Dockerized FastAPI application
-- Health endpoint
-- Environment-based service configuration
+- modular FastAPI router architecture;
+- centralized configuration;
+- shared ChromaDB and Ollama clients;
+- user API-key authentication;
+- separate admin API key;
+- constant-time secret comparison;
+- admin-only document operations;
+- explicit bulk-delete confirmation;
+- PDF MIME validation;
+- 10 MB upload limit;
+- PDF magic-signature validation;
+- UUID-based uploaded filenames;
+- sanitized API errors;
+- server-side exception logging;
+- deterministic chunk identifiers;
+- ChromaDB server mode;
+- Docker deployment;
+- GKE deployment;
+- persistent Chroma/Ollama storage;
+- health endpoint for readiness/liveness checks;
+- GitHub Actions CI/CD;
+- Artifact Registry;
+- grounded RAG prompt;
+- authenticated raw retrieval endpoint.
 
-### Infrastructure Extension
+### Recommended Next Improvements
 
-- Docker networking
-- ChromaDB persistent Docker volume
-- Google Artifact Registry
-- Google Kubernetes Engine
-- Multiple FastAPI replicas
-- Kubernetes health probes
-- GitHub Actions CI/CD
-- Workload Identity Federation
-- Persistent Kubernetes storage
-
-### Planned Production Improvements
-
-- Google Cloud Storage for uploaded PDFs
-- asynchronous document ingestion
-- Redis or Pub/Sub job queue
-- worker services
-- Cloud SQL
-- tenant/user isolation
-- authentication and authorization
-- Secret Manager
-- HTTPS
-- rate limiting
-- structured logging
-- Cloud Monitoring
-- horizontal pod autoscaling
-- load testing
-- failure testing
-- Terraform
+- automated `pytest` unit, API, and integration tests;
+- HTTPS ingress / managed TLS;
+- rate limiting;
+- JWT/OIDC authentication;
+- RBAC beyond static API keys;
+- tenant-scoped metadata and retrieval filters;
+- Google Secret Manager integration;
+- Kubernetes NetworkPolicy for ChromaDB and Ollama;
+- non-root container execution;
+- Kubernetes pod security context;
+- asynchronous PDF ingestion;
+- richer metadata such as `document_id`, version, section ID, and tenant ID;
+- retrieval and generation latency metrics;
+- Terraform infrastructure as code;
+- pinned and regularly audited dependencies and container images.
 
 ---
 
-# Key Concepts Demonstrated
+## Security Notes
 
-This project provides practical exposure to:
-
-- Retrieval-Augmented Generation
-- semantic search
-- vector embeddings
-- vector databases
-- prompt grounding
-- hallucination reduction
-- document ingestion pipelines
-- REST API development
-- containerization
-- service networking
-- persistent storage
-- stateless API design
-- distributed application architecture
-- Kubernetes
-- horizontal scaling
-- health and readiness checks
-- CI/CD
-- cloud deployment
-- infrastructure automation
+- Never commit `API_KEY` or `ADMIN_API_KEY`.
+- Use Kubernetes Secrets or Google Secret Manager for deployed credentials.
+- Do not expose ChromaDB or Ollama directly to the public internet.
+- API keys should only be transmitted over HTTPS in production.
+- `GET /documents` exposes raw indexed content and is therefore admin-only.
+- Bulk deletion requires both admin authentication and an explicit confirmation phrase.
+- Rotate development keys before using the deployment for production-like testing.
 
 ---
 
-# Important Production Considerations
+## License
 
-The current implementation is primarily a learning and engineering project.
-
-Before production use, several areas require additional hardening.
-
-Uploaded PDFs should not permanently reside on the FastAPI pod filesystem because Kubernetes pods are ephemeral. Production document storage should use an object store such as Google Cloud Storage.
-
-Document ingestion should also be moved out of the synchronous `/documents` request path.
-
-The target architecture is:
-
-```text
-POST /documents
-       |
-       v
-Cloud Storage
-       |
-       v
-Job Queue
-       |
-       v
-Worker
-       |
-       +--> Parse
-       +--> Chunk
-       +--> Embed
-       |
-       v
-ChromaDB
-```
-
-Authentication and tenant-level authorization are also required before storing documents belonging to multiple users or organizations.
-
----
-
-# Testing Order
-
-When starting the application locally, test the infrastructure in this order:
-
-```text
-1\. Ollama
-      |
-      v
-2\. ChromaDB
-      |
-      v
-3\. FastAPI /health
-      |
-      v
-4\. /documents/list
-      |
-      v
-5\. POST /documents
-      |
-      v
-6\. /documents/list
-      |
-      v
-7\. /ask
-```
-
-This isolates infrastructure failures before testing the complete RAG pipeline.
-
----
-
-# Example RAG Test
-
-Question:
-
-```text
-Does the annual leave balance carry over to next year?
-```
-
-Expected retrieval behavior:
-
-```text
-Question
-   |
-   v
-Retrieve annual-leave policy
-   |
-   v
-Find carryover rule
-   |
-   v
-Provide context to LLM
-   |
-   v
-Generate grounded answer
-```
-
-The response should be based only on the retrieved policy context and should not incorrectly substitute sick-leave rules for annual-leave rules.
-
----
-
-# License
-
-This project is currently intended for educational, portfolio, and development purposes.
+This project is intended for educational, portfolio, and development purposes.
