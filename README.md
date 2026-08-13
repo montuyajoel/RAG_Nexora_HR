@@ -10,7 +10,7 @@ The project is deployed on **Google Cloud Platform (GCP)** using **Docker, Googl
 
 ## Architecture
 
-![Nexora HR RAG - GKE Architecture](https://drive.google.com/file/d/1zlQNiro83Dng055IIf5wx4agFhixemoG/view?usp=share_link)
+![Nexora HR RAG - GKE Architecture](Nexora_RAG_ARCH.png)
 
 The architecture image summarizes the RAG data path and GKE deployment. The public LoadBalancer routes requests to replicated FastAPI pods, which use Kubernetes services to reach ChromaDB and Ollama. Persistent volumes retain Chroma vector data and Ollama model files across pod replacement.
 
