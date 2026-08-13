@@ -21,63 +21,99 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Download repository code
+      # 1. Checkout repository
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2. Authenticate GitHub Actions to Google Cloud
+      # 2. Verify required GitHub secrets exist
+      - name: Check GCP configuration
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          GCP_WIF_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        run: |
+          test -n "$GCP_PROJECT_ID" || {
+            echo "GCP_PROJECT_ID is missing"
+            exit 1
+          }
+
+          test -n "$GCP_SERVICE_ACCOUNT" || {
+            echo "GCP_SERVICE_ACCOUNT is missing"
+            exit 1
+          }
+
+          test -n "$GCP_WIF_PROVIDER" || {
+            echo "GCP_WORKLOAD_IDENTITY_PROVIDER is missing"
+            exit 1
+          }
+
+          echo "GCP configuration is available."
+
+      # 3. Authenticate GitHub Actions to Google Cloud
       - name: Authenticate to Google Cloud
+        id: auth
         uses: google-github-actions/auth@v3
         with:
-            project_id: ${{ secrets.GCP_PROJECT_ID }}
-            workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-            service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      # 3. Install/configure Google Cloud CLI
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v2
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-      # 4. Allow Docker to push to Artifact Registry
+      # 4. Configure Google Cloud CLI
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      # 5. Configure Docker for Artifact Registry
       - name: Configure Docker
         run: |
           gcloud auth configure-docker \
             $REGION-docker.pkg.dev \
             --quiet
 
-      # 5. Build FastAPI Docker image
+      # 6. Build Docker image
       - name: Build image
         run: |
+          IMAGE_URI="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }}"
+
           docker build \
-            -t $REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }} \
+            -t "$IMAGE_URI" \
             .
 
-      # 6. Push image to Google Artifact Registry
+      # 7. Push image to Artifact Registry
       - name: Push image
         run: |
-          docker push \
-            $REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }}
+          IMAGE_URI="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }}"
 
-      # 7. Connect kubectl to GKE
+          docker push "$IMAGE_URI"
+
+      # 8. Connect kubectl to GKE
       - name: Get GKE credentials
         uses: google-github-actions/get-gke-credentials@v3
         with:
-            cluster_name: rag-cluster
-            location: europe-west1-b
-            project_id: ${{ secrets.GCP_PROJECT_ID }}
+          cluster_name: ${{ env.CLUSTER }}
+          location: ${{ env.ZONE }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      # 8. Replace image placeholder and deploy
+      # 9. Deploy FastAPI to GKE
       - name: Deploy API
         run: |
           IMAGE_URI="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }}"
 
           sed "s|IMAGE_PLACEHOLDER|$IMAGE_URI|g" \
-            kubernetes/api.yaml > /tmp/api.yaml
+            kubernetes/api.yaml \
+            > /tmp/api.yaml
 
           kubectl apply -f /tmp/api.yaml
 
-      # 9. Verify deployment completed
+      # 10. Wait for deployment
       - name: Wait for rollout
         run: |
           kubectl rollout status \
             deployment/rag-api \
-            -n rag \
+            --namespace=rag \
             --timeout=180s
+
+      # 11. Display deployed resources
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n rag
+          kubectl get services -n rag
