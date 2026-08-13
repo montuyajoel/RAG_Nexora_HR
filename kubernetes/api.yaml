@@ -1,52 +1,89 @@
 apiVersion: apps/v1
 kind: Deployment
+
 metadata:
- name: rag-api
- namespace: rag
+  name: rag-api
+  namespace: rag
+
 spec:
- replicas: 2
- selector:
- matchLabels:
- app: rag-api
- template:
- metadata:
- labels:
- app: rag-api
- spec:
- containers:
- - name: rag-api
- image: IMAGE_PLACEHOLDER
- ports:
- - containerPort: 8000
- env:
- - name: CHROMA_HOST
- value: "chroma"
- - name: CHROMA_PORT
- value: "8000"
- - name: OLLAMA_URL
- value: "http://ollama:11434"
- - name: EMBEDDING_MODEL
- value: "nomic-embed-text"
- - name: LLM_MODEL
- value: "llama3.2:3b"
- readinessProbe:
- httpGet:
- path: /health
- port: 8000
- livenessProbe:
- httpGet:
- path: /health
- port: 8000
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: rag-api
+
+  template:
+    metadata:
+      labels:
+        app: rag-api
+
+    spec:
+      containers:
+        - name: rag-api
+          image: IMAGE_PLACEHOLDER
+
+          ports:
+            - containerPort: 8000
+
+          env:
+            - name: CHROMA_HOST
+              value: "chroma"
+
+            - name: CHROMA_PORT
+              value: "8000"
+
+            - name: OLLAMA_URL
+              value: "http://ollama:11434"
+
+            - name: EMBEDDING_MODEL
+              value: "nomic-embed-text"
+
+            - name: LLM_MODEL
+              value: "llama3.2:3b"
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+
 ---
+
 apiVersion: v1
 kind: Service
+
 metadata:
- name: rag-api-service
- namespace: rag
+  name: rag-api-service
+  namespace: rag
+
 spec:
- type: LoadBalancer
- selector:
- app: rag-api
- ports:
- - port: 80
- targetPort: 8000
+  type: LoadBalancer
+
+  selector:
+    app: rag-api
+
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000

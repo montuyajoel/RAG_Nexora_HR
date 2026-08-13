@@ -1,49 +1,82 @@
 name: Deploy RAG API to GKE
+
 on:
- push:
- branches:
- - main
+  push:
+    branches:
+      - main
+
 permissions:
- contents: read
- id-token: write
+  contents: read
+  id-token: write
+
 env:
- REGION: europe-west1
- ZONE: europe-west1-b
- REPOSITORY: rag-containers
- IMAGE: nexora-rag-api
- CLUSTER: rag-cluster
+  REGION: europe-west1
+  ZONE: europe-west1-b
+  REPOSITORY: rag-containers
+  IMAGE: nexora-rag-api
+  CLUSTER: rag-cluster
+
 jobs:
- deploy:
- runs-on: ubuntu-latest
- steps:
- - name: Checkout
- uses: actions/checkout@v4
- - name: Authenticate to Google Cloud
- uses: google-github-actions/auth@v2
- with:
- workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
- service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
- - name: Set up gcloud
- uses: google-github-actions/setup-gcloud@v2
- - name: Configure Docker
- run: |
- gcloud auth configure-docker $REGION-docker.pkg.dev --quiet
- - name: Build image
- run: |
- docker build -t $REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }} .
- - name: Push image
- run: |
- docker push $REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }}
- - name: Get GKE credentials
- uses: google-github-actions/get-gke-credentials@v2
- with:
- cluster_name: ${{ env.CLUSTER }}
- location: ${{ env.ZONE }}
- - name: Deploy API
- run: |
- IMAGE_URI="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }}"
- sed "s|IMAGE_PLACEHOLDER|$IMAGE_URI|g" kubernetes/api.yaml > /tmp/api.yaml
- kubectl apply -f /tmp/api.yaml
- - name: Wait for rollout
- run: |
- kubectl rollout status deployment/rag-api -n rag --timeout=180s
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Download repository code
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Authenticate GitHub Actions to Google Cloud
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      # 3. Install/configure Google Cloud CLI
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      # 4. Allow Docker to push to Artifact Registry
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker \
+            $REGION-docker.pkg.dev \
+            --quiet
+
+      # 5. Build FastAPI Docker image
+      - name: Build image
+        run: |
+          docker build \
+            -t $REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }} \
+            .
+
+      # 6. Push image to Google Artifact Registry
+      - name: Push image
+        run: |
+          docker push \
+            $REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }}
+
+      # 7. Connect kubectl to GKE
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.CLUSTER }}
+          location: ${{ env.ZONE }}
+
+      # 8. Replace image placeholder and deploy
+      - name: Deploy API
+        run: |
+          IMAGE_URI="$REGION-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/$REPOSITORY/$IMAGE:${{ github.sha }}"
+
+          sed "s|IMAGE_PLACEHOLDER|$IMAGE_URI|g" \
+            kubernetes/api.yaml > /tmp/api.yaml
+
+          kubectl apply -f /tmp/api.yaml
+
+      # 9. Verify deployment completed
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status \
+            deployment/rag-api \
+            -n rag \
+            --timeout=180s
