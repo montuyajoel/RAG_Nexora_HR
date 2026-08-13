@@ -18,6 +18,8 @@ spec:
         app: chroma
 
     spec:
+      enableServiceLinks: false
+
       containers:
         - name: chroma
           image: chromadb/chroma:latest
