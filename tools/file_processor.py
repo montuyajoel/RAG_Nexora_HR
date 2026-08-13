@@ -4,7 +4,7 @@ import hashlib
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-
+# Builds a knowledge base from a list of PDF file paths and stores the chunks in a ChromaDB collection.
 def build_knowledge_base(
     pdf_paths: list[str],
     collection
@@ -21,8 +21,8 @@ def build_knowledge_base(
 
     # 2. Split documents into chunks
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=100,
+        chunk_size=1000,
+        chunk_overlap=120,
         separators=[
             "\n\n",
             "\n",

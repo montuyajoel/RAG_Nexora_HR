@@ -40,6 +40,12 @@ spec:
 
             - name: LLM_MODEL
               value: "llama3.2:3b"
+            
+            - name: API_KEY
+              valueFrom:
+              secretKeyRef:
+                name: rag-api-secrets
+                key: API_KEY
 
           readinessProbe:
             httpGet:
