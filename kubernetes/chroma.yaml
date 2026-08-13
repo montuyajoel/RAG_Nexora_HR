@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+ name: chroma
+ namespace: rag
+spec:
+ replicas: 1
+ selector:
+ matchLabels:
+ app: chroma
+ template:
+ metadata:
+ labels:
+ app: chroma
+ spec:
+ containers:
+ - name: chroma
+ image: chromadb/chroma:latest
+ ports:
+ - containerPort: 8000
+ volumeMounts:
+ - name: data
+ mountPath: /data
+ volumes:
+ - name: data
+ persistentVolumeClaim:
+ claimName: chroma-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+ name: chroma
+ namespace: rag
+ spec:
+ selector:
+ app: chroma
+ ports:
+ - port: 8000
+ targetPort: 8000
+
+kubectl apply -f kubernetes/chroma-pvc.yaml
+kubectl apply -f kubernetes/chroma.yaml

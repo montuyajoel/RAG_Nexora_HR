@@ -2,3 +2,9 @@
 __pycache__
 pdfs/*
 .DS_Store
+*.pyc
+.git
+chroma_db
+pdfs
+.env
+.DS_Store
