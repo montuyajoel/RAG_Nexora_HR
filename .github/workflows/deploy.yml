@@ -27,11 +27,11 @@ jobs:
 
       # 2. Authenticate GitHub Actions to Google Cloud
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
+            project_id: ${{ secrets.GCP_PROJECT_ID }}
+            workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+            service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       # 3. Install/configure Google Cloud CLI
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
@@ -58,10 +58,11 @@ jobs:
 
       # 7. Connect kubectl to GKE
       - name: Get GKE credentials
-        uses: google-github-actions/get-gke-credentials@v2
+        uses: google-github-actions/get-gke-credentials@v3
         with:
-          cluster_name: ${{ env.CLUSTER }}
-          location: ${{ env.ZONE }}
+            cluster_name: rag-cluster
+            location: europe-west1-b
+            project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       # 8. Replace image placeholder and deploy
       - name: Deploy API
