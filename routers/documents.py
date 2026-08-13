@@ -14,7 +14,9 @@ from fastapi import (
 from clients import collection
 from config import UPLOAD_DIR
 from tools.file_processor import build_knowledge_base
-from security import verify_api_key
+from security import verify_api_key, verify_admin_api_key
+
+MAX_FILE_SIZE = 10 * 1024 * 1024
 
 # Set up logging
 from tools.logger import get_logger
@@ -28,7 +30,7 @@ router = APIRouter()
 def add_document(
     file: UploadFile = File(...),
     api_key: str = Security(
-        verify_api_key
+        verify_admin_api_key
     ),
 ):
     if file.content_type != "application/pdf":
@@ -44,6 +46,31 @@ def add_document(
                 "The uploaded file must "
                 "have a filename."
             ),
+        )
+
+    # Read only up to the maximum size + 1 byte.
+    content = file.file.read(
+        MAX_FILE_SIZE + 1
+    )
+
+    if len(content) > MAX_FILE_SIZE:
+        file.file.close()
+
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "PDF exceeds the "
+                "10 MB upload limit."
+            ),
+        )
+
+    # Verify actual PDF signature.
+    if not content.startswith(b"%PDF-"):
+        file.file.close()
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid PDF file.",
         )
 
     original_filename = Path(
@@ -67,21 +94,18 @@ def add_document(
             file_path,
             "wb",
         ) as buffer:
-            shutil.copyfileobj(
-                file.file,
-                buffer,
+            buffer.write(
+                content
             )
 
-    except Exception as error:
-        logger.error(
-            "Failed to save PDF: "
-            f"{str(error)}"
+    except Exception:
+        logger.exception(
+            "Failed to save PDF"
         )
+
         raise HTTPException(
             status_code=500,
-            detail=(
-                "Failed to save PDF."
-            ),
+            detail="Failed to save PDF.",
         )
 
     finally:
@@ -95,13 +119,12 @@ def add_document(
             collection=collection,
         )
 
-    except Exception as error:
+    except Exception:
         if file_path.exists():
             file_path.unlink()
 
-        logger.error(
-            "Failed to process document: "
-            f"{str(error)}"
+        logger.exception(
+            "Failed to process document"
         )
 
         raise HTTPException(
@@ -124,7 +147,7 @@ def add_document(
 @router.get("/documents")
 def get_documents(
     api_key: str = Security(
-        verify_api_key
+        verify_admin_api_key
     ),
 ):
     try:
@@ -136,7 +159,7 @@ def get_documents(
         )
 
     except Exception as error:
-        logger.error(
+        logger.exception(
             "Failed to retrieve documents: "
             f"{str(error)}"
         )
@@ -176,7 +199,7 @@ def get_documents(
 @router.get("/documents/list")
 def get_uploaded_documents(
     api_key: str = Security(
-        verify_api_key
+        verify_admin_api_key
     ),
 ):
     try:
@@ -187,7 +210,7 @@ def get_uploaded_documents(
         )
 
     except Exception as error:
-        logger.error(
+        logger.exception(
             "Failed to retrieve document list: "
             f"{str(error)}"
         )
@@ -231,33 +254,64 @@ def get_uploaded_documents(
 # Delete all documents and their chunks from the ChromaDB collection.
 @router.delete("/documents")
 def delete_documents(
+    confirm: str,
     api_key: str = Security(
-        verify_api_key
+        verify_admin_api_key
     ),
 ):
-    try:
-        collection.delete(
-            where={}
+    if confirm != "DELETE_ALL_DOCUMENTS":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid deletion confirmation."
+            ),
         )
 
-    except Exception as error:
-        logger.error(
-            "Failed to delete documents: "
-            f"{str(error)}"
+    try:
+        results = collection.get()
+
+        ids_to_delete = results.get(
+            "ids",
+            []
         )
-        
+
+        if not ids_to_delete:
+            return {
+                "message": (
+                    "No documents found to delete."
+                ),
+                "deleted_chunks": 0,
+            }
+
+        collection.delete(
+            ids=ids_to_delete
+        )
+
+    except Exception:
+        logger.exception(
+            "Failed to delete documents"
+        )
+
         raise HTTPException(
             status_code=503,
             detail=(
-                "Document service is currently unavailable."
+                "Document service is "
+                "currently unavailable."
             ),
         )
+
+    logger.warning(
+        "All document chunks deleted: %s",
+        len(ids_to_delete),
+    )
 
     return {
         "message": (
             "All documents and their "
             "chunks have been deleted."
-        )
+        ),
+        "deleted_chunks":
+            len(ids_to_delete),
     }
 
 # Delete a specific document and its chunks from the ChromaDB collection based on the document ID.
@@ -265,19 +319,18 @@ def delete_documents(
 def delete_document(
     document_id: str,
     api_key: str = Security(
-        verify_api_key
+        verify_admin_api_key
     ),
 ):
     try:
         results = collection.get(
             include=[
-                "ids",
                 "metadatas",
             ]
         )
 
     except Exception as error:
-        logger.error(
+        logger.exception(
             "Failed to retrieve documents: "
             f"{str(error)}"
         )
@@ -301,7 +354,7 @@ def delete_document(
         )
 
         if source.startswith(
-            f"{document_id}_"
+            f"{document_id}_"       
         ):
             document_ids_to_delete.append(
                 results["ids"][i]
@@ -318,15 +371,11 @@ def delete_document(
 
     try:
         collection.delete(
-            where={
-                "id": {
-                    "$in": document_ids_to_delete
-                }
-            }
+            ids=document_ids_to_delete
         )
 
     except Exception as error:
-        logger.error(
+        logger.exception   (
             "Failed to delete document: "
             f"{str(error)}"
         )

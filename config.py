@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 
+
 CHROMA_HOST = os.getenv(
     "CHROMA_HOST",
     "localhost",
@@ -33,9 +34,17 @@ COLLECTION_NAME = os.getenv(
     "nexora_hr",
 )
 
-API_KEY = os.getenv("API_KEY")
+API_KEY = os.getenv(
+    "API_KEY"
+)
 
-UPLOAD_DIR = Path("./pdfs")
+ADMIN_API_KEY = os.getenv(
+    "ADMIN_API_KEY"
+)
+
+UPLOAD_DIR = Path(
+    "./pdfs"
+)
 
 UPLOAD_DIR.mkdir(
     parents=True,

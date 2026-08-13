@@ -38,7 +38,7 @@ def ask(
         )
 
     except Exception as error:
-        logger.error(
+        logger.exception(
             "ChromaDB query failed: "
             f"{str(error)}"
         )
@@ -121,7 +121,7 @@ Answer:
         )
 
     except Exception as error:
-        logger.error(
+        logger.exception(
             "Ollama generation failed: "
             f"{str(error)}"
         )
@@ -162,7 +162,7 @@ def retrieve(
         )
 
     except Exception as error:
-        logger.error(
+        logger.exception(
             "ChromaDB retrieval failed: "
             f"{str(error)}"
         )
