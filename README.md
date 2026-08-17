@@ -1,14 +1,39 @@
-# Nexora HR RAG API
+# Flexible RAG Platform
 
-A local-first **Retrieval-Augmented Generation (RAG)** application for querying HR policy documents using **FastAPI, ChromaDB, Ollama, LangChain, and local LLMs**.
+A data-agnostic **Retrieval-Augmented Generation (RAG) platform** for ingesting, indexing, retrieving, and querying uploaded PDF documents using **FastAPI, ChromaDB, Ollama, LangChain, and local LLMs**.
 
-The application supports authenticated HR-policy retrieval, administrative PDF ingestion and document management, vector search through ChromaDB, and grounded answer generation through Ollama. It is designed to run locally with Docker and on **Google Cloud Platform (GCP)** using **Google Kubernetes Engine (GKE), Artifact Registry, persistent storage, and GitHub Actions**.
+The platform is deployed without bundled source documents. Administrators can upload PDFs at runtime, after which the application validates, chunks, embeds, indexes, persists, retrieves, and uses the ingested content for grounded answer generation. It supports authenticated retrieval, administrative document management, vector search through ChromaDB, and local LLM generation through Ollama. It is designed to run locally with Docker and on **Google Cloud Platform (GCP)** using **Google Kubernetes Engine (GKE), Artifact Registry, persistent storage, and GitHub Actions**.
+
+## Design Goal
+
+The platform is intentionally **document-agnostic**. It does not ship with a fixed knowledge base or domain dataset.
+
+At deployment time, the RAG service starts as reusable infrastructure:
+
+```text
+Deploy Platform
+   |
+   v
+Empty / Existing Vector Store
+   |
+   v
+Admin uploads PDFs at runtime
+   |
+   v
+Validate -> Extract -> Chunk -> Embed -> Index
+   |
+   v
+Documents become queryable
+```
+
+This allows the same deployment pattern to support different document domains without changing the core RAG pipeline. Domain-specific behavior should be introduced through uploaded content, metadata, retrieval filters, and prompt configuration rather than by hard-coding a single dataset into the application.
+
 
 ---
 
 ## Architecture
 
-![Nexora HR RAG - GKE Architecture](docs/Nexora_RAG_ARCH.png)
+![Flexible RAG Platform - GKE Architecture](docs/Flexible_RAG_Platform_ARCH.png)
 
 ```text
 Client
@@ -144,7 +169,7 @@ DELETE_ALL_DOCUMENTS
 
 ### 1. Retrieve
 
-`GET /ask` embeds the incoming question and queries ChromaDB.
+`GET /ask` embeds the incoming question and queries the currently indexed document collection in ChromaDB.
 
 Current configuration:
 
@@ -166,14 +191,14 @@ n_results=3
 
 ### 2. Augment
 
-Retrieved chunks are combined with the user question in a grounded HR-policy prompt.
+Retrieved chunks are combined with the user question in a grounded document-question-answering prompt.
 
 The prompt instructs the model to:
 
 - use only retrieved context;
 - avoid outside knowledge;
-- avoid invented policy;
-- avoid mixing unrelated leave categories;
+- avoid invented facts or unsupported claims;
+- avoid mixing unrelated document topics or sections;
 - explicitly state when the supplied context is insufficient.
 
 ### 3. Generate
@@ -266,11 +291,44 @@ Current metadata shape:
 
 ```json
 {
-  "source": "./pdfs/example.pdf",
+  "source": "./uploads/example.pdf",
   "page": 3,
   "chunk_index": 12
 }
 ```
+
+---
+
+## Data Lifecycle
+
+The deployed service does **not** require a pre-packaged knowledge base.
+
+```text
+Runtime PDF Upload
+   |
+   v
+Validation
+   |
+   v
+Temporary / Managed File Storage
+   |
+   v
+Text Extraction
+   |
+   v
+Chunking
+   |
+   v
+Embedding
+   |
+   v
+ChromaDB Persistence
+   |
+   v
+Retrieval + Grounded Generation
+```
+
+Deleting a document removes its indexed chunks from ChromaDB. Deleting all documents returns the platform to an empty knowledge-base state without requiring the application image to be rebuilt.
 
 ---
 
@@ -289,7 +347,7 @@ Example response:
 ```json
 {
   "status": "healthy",
-  "service": "nexora-rag-api"
+  "service": "flexible-rag-platform"
 }
 ```
 
@@ -388,7 +446,7 @@ The application first fetches all stored IDs, then deletes them explicitly. Empt
 ## Project Structure
 
 ```text
-RAG_Nexora_HR/
+flexible-rag-platform/
 ├── main.py
 ├── config.py
 ├── clients.py
@@ -406,7 +464,7 @@ RAG_Nexora_HR/
 │   └── logger.py
 │
 ├── docs/
-│   └── Nexora_RAG_ARCH.png
+│   └── Flexible_RAG_Platform_ARCH.png
 │
 ├── kubernetes/
 │   ├── api.yaml
@@ -427,8 +485,8 @@ RAG_Nexora_HR/
 Clone:
 
 ```bash
-git clone https://github.com/montuyajoel/RAG_Nexora_HR.git
-cd RAG_Nexora_HR
+git clone https://github.com/montuyajoel/flexible-rag-platform.git
+cd flexible-rag-platform
 ```
 
 Create a virtual environment:
@@ -522,14 +580,14 @@ export ADMIN_API_KEY="$(openssl rand -hex 32)"
 Build:
 
 ```bash
-docker build -t nexora-rag-api .
+docker build -t flexible-rag-platform .
 ```
 
 Run:
 
 ```bash
 docker run \
-  --name nexora-rag-api \
+  --name flexible-rag-platform \
   --network rag-network \
   -p 8000:8000 \
   -e CHROMA_HOST=chroma \
@@ -537,7 +595,7 @@ docker run \
   -e OLLAMA_URL=http://host.docker.internal:11434 \
   -e API_KEY="$API_KEY" \
   -e ADMIN_API_KEY="$ADMIN_API_KEY" \
-  nexora-rag-api
+  flexible-rag-platform
 ```
 
 Health check:
@@ -552,7 +610,7 @@ RAG request:
 curl -G \
   -H "X-API-Key: $API_KEY" \
   "http://localhost:8000/ask" \
-  --data-urlencode "question=What is the annual leave entitlement?"
+  --data-urlencode "question=What does the uploaded document say about the requested topic?"
 ```
 
 Admin document list:
@@ -582,7 +640,7 @@ curl -X DELETE \
 | `OLLAMA_URL` | `http://localhost:11434` | `http://ollama:11434` |
 | `EMBEDDING_MODEL` | `nomic-embed-text` | `nomic-embed-text` |
 | `LLM_MODEL` | `llama3.2:3b` | `llama3.2:3b` |
-| `CHROMA_COLLECTION` | `nexora_hr` | `nexora_hr` |
+| `CHROMA_COLLECTION` | `flexible_rag` | `flexible_rag` |
 | `API_KEY` | required | secret-managed |
 | `ADMIN_API_KEY` | required | secret-managed |
 
@@ -619,7 +677,7 @@ Current configuration:
 | Cluster | `rag-cluster` |
 | Namespace | `rag` |
 | Artifact Registry | `rag-containers` |
-| API image | `nexora-rag-api` |
+| API image | `flexible-rag-platform` |
 | FastAPI replicas | 2 |
 | ChromaDB replicas | 1 |
 | Ollama replicas | 1 |
@@ -654,6 +712,7 @@ Internal exceptions are logged server-side while API clients receive sanitized e
 
 ### Implemented
 
+- runtime document ingestion without bundled source data;
 - modular FastAPI router architecture;
 - centralized configuration;
 - shared ChromaDB and Ollama clients;
