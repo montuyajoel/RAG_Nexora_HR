@@ -33,7 +33,7 @@ This allows the same deployment pattern to support different document domains wi
 
 ## Architecture
 
-![Flexible RAG Platform - GKE Architecture](docs/Flexible_RAG_Platform_ARCH.png)
+![Flexible RAG Platform - GKE Architecture](docs/Nexora_RAG_ARCH.png)
 
 ```text
 Client
