@@ -8,3 +8,6 @@ chroma_db
 pdfs
 .env
 .DS_Store
+eval_results.json
+eval_dataset.json
+scripts/*_results.json

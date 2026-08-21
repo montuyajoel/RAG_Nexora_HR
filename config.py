@@ -29,6 +29,14 @@ LLM_MODEL = os.getenv(
     "llama3.2:3b",
 )
 
+# Judge model used by Ragas validation. Defaults to the generation
+# model so evaluation works out of the box; prefer a stronger local
+# model such as mistral:7b or llama3.1:8b for more reliable scores.
+JUDGE_MODEL = os.getenv(
+    "JUDGE_MODEL",
+    LLM_MODEL,
+)
+
 COLLECTION_NAME = os.getenv(
     "CHROMA_COLLECTION",
     "nexora_hr",

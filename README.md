@@ -45,6 +45,7 @@ FastAPI
   +--> /health
   +--> /ask
   +--> /retrieve
+  +--> /validate
   +--> /documents
   |
   +--------------------+
@@ -112,6 +113,7 @@ Answer
 | `nomic-embed-text` | Embedding model |
 | Ollama | Local model runtime |
 | `llama3.2:3b` | Response generation |
+| Ragas | Faithfulness / answer relevancy validation |
 | Docker | Containerization |
 | GKE | Kubernetes runtime |
 | Artifact Registry | Container registry |
@@ -147,7 +149,9 @@ Public
 
 Authenticated user
 ├── GET /ask
-└── GET /retrieve
+├── GET /retrieve
+├── POST /validate
+└── POST /validate/batch
 
 Administrator
 ├── POST   /documents
@@ -377,6 +381,75 @@ X-API-Key: <api-key>
 
 Returns retrieved chunks, metadata, and distances without generating an LLM answer.
 
+### Validate an Answer with Ragas
+
+```http
+POST /validate
+```
+
+Header:
+
+```text
+X-API-Key: <api-key>
+```
+
+Body:
+
+```json
+{
+  "question": "How many days of annual leave does a full-time employee receive?",
+  "answer": "Full-time employees receive 25 days of annual leave each year.",
+  "contexts": [
+    "Annual leave policy: Full-time employees are entitled to 25 days of paid annual leave per calendar year."
+  ]
+}
+```
+
+Returns reference-free Ragas scores:
+
+- `faithfulness` — is the answer grounded in the provided contexts?
+- `answer_relevancy` — does the answer address the question?
+
+Optional fields: `judge_model`, `embedding_model`.
+
+Batch validation:
+
+```http
+POST /validate/batch
+```
+
+```json
+{
+  "samples": [
+    {
+      "question": "...",
+      "answer": "...",
+      "contexts": ["..."]
+    }
+  ]
+}
+```
+
+### Offline Ragas CLI
+
+Evaluate a JSON dataset without calling the API:
+
+```bash
+python scripts/evaluate_rag.py \
+  --dataset scripts/sample_eval_dataset.json \
+  --fail-below 0.5 \
+  --output eval_results.json
+```
+
+Use a stronger local judge when available:
+
+```bash
+ollama pull mistral:7b
+python scripts/evaluate_rag.py \
+  --dataset scripts/sample_eval_dataset.json \
+  --judge-model mistral:7b
+```
+
 ### Upload a PDF
 
 ```http
@@ -457,11 +530,18 @@ flexible-rag-platform/
 ├── routers/
 │   ├── ask.py
 │   ├── documents.py
-│   └── healthcheck.py
+│   ├── healthcheck.py
+│   └── validate.py
 │
 ├── tools/
 │   ├── file_processor.py
-│   └── logger.py
+│   ├── logger.py
+│   ├── ragas_compat.py
+│   └── ragas_validator.py
+│
+├── scripts/
+│   ├── evaluate_rag.py
+│   └── sample_eval_dataset.json
 │
 ├── docs/
 │   └── Flexible_RAG_Platform_ARCH.png
@@ -640,6 +720,7 @@ curl -X DELETE \
 | `OLLAMA_URL` | `http://localhost:11434` | `http://ollama:11434` |
 | `EMBEDDING_MODEL` | `nomic-embed-text` | `nomic-embed-text` |
 | `LLM_MODEL` | `llama3.2:3b` | `llama3.2:3b` |
+| `JUDGE_MODEL` | same as `LLM_MODEL` | same as `LLM_MODEL` |
 | `CHROMA_COLLECTION` | `flexible_rag` | `flexible_rag` |
 | `API_KEY` | required | secret-managed |
 | `ADMIN_API_KEY` | required | secret-managed |
@@ -736,7 +817,9 @@ Internal exceptions are logged server-side while API clients receive sanitized e
 - GitHub Actions CI/CD;
 - Artifact Registry;
 - grounded RAG prompt;
-- authenticated raw retrieval endpoint.
+- authenticated raw retrieval endpoint;
+- Ragas validation endpoint (`POST /validate`);
+- offline Ragas evaluation CLI.
 
 ### Recommended Next Improvements
 
