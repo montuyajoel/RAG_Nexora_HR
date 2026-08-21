@@ -1,0 +1,17 @@
+[
+  {
+    "question": "How many days of annual leave does a full-time employee receive?",
+    "answer": "Full-time employees receive 25 days of annual leave each year.",
+    "contexts": [
+      "Annual leave policy: Full-time employees are entitled to 25 days of paid annual leave per calendar year. Leave must be approved by a line manager.",
+      "Sick leave is separate from annual leave and is capped at 10 paid days per year."
+    ]
+  },
+  {
+    "question": "How many days of annual leave does a full-time employee receive?",
+    "answer": "Employees can take unlimited vacation whenever they want.",
+    "contexts": [
+      "Annual leave policy: Full-time employees are entitled to 25 days of paid annual leave per calendar year. Leave must be approved by a line manager."
+    ]
+  }
+]
